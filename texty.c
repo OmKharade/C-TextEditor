@@ -7,6 +7,8 @@
 #include <stdlib.h>
 #include <errno.h>
 
+#define CTRL(k) ((k) & 0x1f)
+
 /* data */
 
 struct termios default_termios;
@@ -41,21 +43,35 @@ void enableRawMode() {
       die("tcgetattr");
   }
 
+char editorReadKey(){
+  int nread;
+  char c;
+  while((nread = read(STDIN_FILENO, &c, 1)) != 1){
+    if(nread == -1 && errno != EAGAIN)
+      die("read");
+  }
+  return c;
+}
+
+/* input */
+
+void editorProcessKeypresses(){
+  char c = editorReadKey();
+
+  switch (c){
+    case CTRL('q'):
+      exit(0);
+      break;
+  }
+}
+
 /* init */
 
 int main(){
     enableRawMode();
 
     while (1) {
-      char c = '\0';
-      if(read(STDIN_FILENO, &c, 1) == -1 && errno != EAGAIN) 
-        die("read");
-      if (iscntrl(c)) {
-        printf("%d\r\n", c);
-      } else {
-        printf("%d ('%c')\r\n", c, c);
-      }
-      if (c == 'q') break;
+      editorProcessKeypresses();
     }
     return 0;
 }
