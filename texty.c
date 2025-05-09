@@ -19,6 +19,7 @@
 #define CTRL_KEY(k) ((k) & 0x1f)
 #define TEXTY_VERSION "0.0.1"
 #define TAB_STOP 8
+#define QUIT_TIMES 3
 
 enum editorKey{
   BACKSPACE = 127,
@@ -215,10 +216,12 @@ void editorUpdateRow(erow *row){
   row->rsize = idx;
 }
 
-void editorAppendRow(char *s, size_t len){
-  E.row = realloc(E.row, sizeof(erow) * (E.numrows+1));
+void editorInsertRow(int at, char *s, size_t len){
+  if(at < 0 || at > E.numrows)  return;
 
-  int at = E.numrows;
+  E.row = realloc(E.row, sizeof(erow) * (E.numrows+1));
+  memmove(&E.row[at+1], &E.row[at], sizeof(erow)*(E.numrows-at));
+
   E.row[at].size = len;
   E.row[at].chars = malloc(len + 1);
   memcpy(E.row[at].chars, s, len);
@@ -230,12 +233,34 @@ void editorAppendRow(char *s, size_t len){
   E.dirty++;
 }
 
+void editorFreeRow(erow *row){
+  free(row->render);
+  free(row->chars);
+}
+
+void editorDelRow(int at){
+  if(at < 0 || at >= E.numrows) return;
+  editorFreeRow(&E.row[at]);
+  memmove(&E.row[at], &E.row[at+1], sizeof(erow)*(E.numrows-at-1));
+  E.numrows--;
+  E.dirty++;
+}
+
 void editorRowInsertChar(erow *row, int at, int c){
   if(at < 0 || at > row->size)  at = row->size;
   row->chars = realloc(row->chars, row->size+2);
   memmove(&row->chars[at+1], &row->chars[at], row->size - at + 1);
   row->size++;
   row->chars[at] = c;
+  editorUpdateRow(row);
+  E.dirty++;
+}
+
+void editorRowAppendString(erow *row, char *s, size_t len){
+  row->chars = realloc(row->chars, row->size + len + 1);
+  memcpy(&row->chars[row->size], s, len);
+  row->size += len;
+  row->chars[row->size] = '\0';
   editorUpdateRow(row);
   E.dirty++;
 }
@@ -252,14 +277,32 @@ void editorRowDeleteChar(erow *row, int at){
 
 void editorInsertChar(int c){
   if(E.cy == E.numrows){
-    editorAppendRow("", 0);
+    editorInsertRow(E.numrows,"", 0);
   }
   editorRowInsertChar(&E.row[E.cy], E.cx, c);
   E.cx++;
 }
 
+void editorInsertNewLine(){
+  if(E.cx == 0)
+    editorInsertRow(E.cy, "", 0);
+  else{
+    erow *row = &E.row[E.cy];
+    editorInsertRow(E.cy + 1, &row->chars[E.cy], row->size - E.cx);
+    row = &E.row[E.cy];
+    row->size = E.cx;
+    row->chars[row->size] = '\0';
+    editorUpdateRow(row);
+  }
+  E.cy++;
+  E.cx = 0;
+}
+
 void editorDelChar(){
   if(E.cy == E.numrows){
+    return;
+  }
+  if(E.cx == 0 && E.cy == 0){
     return;
   }
 
@@ -267,6 +310,12 @@ void editorDelChar(){
   if(E.cx > 0){
     editorRowDeleteChar(row, E.cx - 1);
     E.cx--;
+  }
+  else{
+    E.cx = E.row[E.cy-1].size;
+    editorRowAppendString(&E.row[E.cy-1], row->chars, row->size);
+    editorDelRow(E.cy);
+    E.cy--;
   }
 }
 
@@ -303,7 +352,7 @@ void editorOpen(char *filename){
   while((linelen = getline(&line, &linecap, fp)) != -1){
     while(linelen > 0 && (line[linelen-1] == '\n' || line[linelen-1] == '\r'))
       linelen--;
-    editorAppendRow(line, linelen);
+    editorInsertRow(E.numrows, line, linelen);
     }
   free(line);
   fclose(fp);
@@ -394,13 +443,19 @@ void editorMoveCursor(int key){
 
 void editorProcessKeypresses(){
   int c = editorReadKey();
+  static int quit = QUIT_TIMES;
 
   switch (c){
     case '\r':
-      /* todo */
+      editorInsertNewLine();
       break;
 
     case CTRL_KEY('q'):
+      if(E.dirty && quit > 0){
+        editorSetStatusMessage("WARNING! File has unsaved changes. Press CTRL-Q %d more times to quit", quit);
+        quit--;
+        return;
+      }
       write(STDOUT_FILENO, "\x1b[2J", 4);
       write(STDOUT_FILENO, "\x1b[H", 3);
       exit(0);
