@@ -1,18 +1,33 @@
 # C-TextEditor
 A Text Editor in C
 
-Following https://viewsourcecode.org/snaptoken/kilo/
+Following [this blog](https://viewsourcecode.org/snaptoken/kilo/)
 
-### Initial setup
+At this stage, the blog implementation is complete with these key features.
 
-I used WSL(Windows Subsystem for Linux) as the blog suggests using some kind of a Linux Environment.
-Made sure that I had a C Compiler and `make` installed.
+- Save as new file / edit existing file
+- Syntax highlighting
+- Search
 
-So far, to test the code, I am using the `Makefile` to build and run.
+Next step, to implement at least one of the suggested features on my own
 
-Run these commands:
+![Suggested Features](image.png)
+
+### To run this project
 
 ```bash
+git clone https://github.com/OmKharade/C-TextEditor.git
+
+cd C-TextEditor
+
 make
-./testy
+
+# Open text editor with an empty file
+./texty
+
+# Open text editor with an existing file
+./texty <filename>
 ```
+
+
+> The original source code can be found [here](https://github.com/snaptoken/kilo-src)
