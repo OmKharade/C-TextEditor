@@ -893,8 +893,8 @@ void editorScroll(){
   if(E.rx < E.coloff){
     E.coloff = E.rx;
   }
-  if(E.rx >= E.coloff + E.screencols){
-    E.coloff = E.rx - E.screencols + 1;
+  if(E.rx >= E.coloff + E.screencols - 5){
+    E.coloff = E.rx - E.screencols + 5 ;
   }
 }
 
@@ -920,9 +920,16 @@ void editorDrawRows(struct abuf *ab){
       }
     }
     else{
+      // display line number on the left of each line
+      char linenum[16];
+      int linenum_num = snprintf(linenum, sizeof(linenum), "%-4d ", filerow + 1);
+      abAppend(ab, "\x1b[90m", 5);
+      abAppend(ab, linenum, linenum_num);
+      abAppend(ab, "\x1b[39m", 5);
+
       int len = E.row[filerow].rsize - E.coloff;
       if(len < 0) len = 0;
-      if(len > E.screencols) len = E.screencols;
+      if(len > E.screencols - 5) len = E.screencols - 5;
       char *c = &E.row[filerow].render[E.coloff];
       unsigned char *hl = &E.row[filerow].hl[E.coloff];
       int current_color = -1;
@@ -1006,7 +1013,7 @@ void editorRefreshScreen(){
   editorDrawMessageBar(&ab);
 
   char buf[32];
-  snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy-E.rowoff+1, E.rx-E.coloff+1);
+  snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy-E.rowoff+1, E.rx-E.coloff+6);
   abAppend(&ab, buf, strlen(buf));
   abAppend(&ab, "\x1b[?25h", 6);
 

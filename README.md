@@ -13,6 +13,11 @@ Next step, to implement at least one of the suggested features on my own
 
 ![Suggested Features](image.png)
 
+### Features added so far
+
+- [x] Display line numbers on the left of the line
+
+
 ### To run this project
 
 ```bash
