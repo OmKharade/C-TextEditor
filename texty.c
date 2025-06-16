@@ -20,6 +20,7 @@
 #define TEXTY_VERSION "0.0.1"
 #define TAB_STOP 8
 #define QUIT_TIMES 3
+#define LINE_NUM_WIDTH 5
 
 enum editorKey{
   BACKSPACE = 127,
@@ -114,6 +115,10 @@ struct editorSyntax HLDB[] = {
 void editorSetStatusMessage(const char *fmt, ...);
 void editorRefreshScreen();
 char *editorPrompt(char *prompt, void (*callback)(char *, int));
+int getWrappedScreenY(int filerow, int rx);
+int getTotalWrappedLines();
+int getCursorScreenX(int cy, int rx);
+int findLastWrappedLineStart(erow *row);
 
 /* terminal */
 
@@ -392,6 +397,118 @@ void editorSelectSyntaxHighlight(){
     }
     
   }
+}
+
+/* word wrap */
+
+int getWrappedScreenY(int filerow, int rx) {
+  int screen_y = 0;
+  int line_width = E.screencols - LINE_NUM_WIDTH;
+  
+  for (int i = 0; i < filerow; i++) {
+    if (i < E.numrows) {
+      screen_y += (E.row[i].rsize + line_width - 1) / line_width;
+      if (E.row[i].rsize == 0) screen_y++;
+    }
+  }
+  
+  if (filerow < E.numrows) {
+    screen_y += rx / line_width;
+  }
+  
+  return screen_y;
+}
+
+int getTotalWrappedLines() {
+  int total = 0;
+  int line_width = E.screencols - LINE_NUM_WIDTH;
+  
+  for (int i = 0; i < E.numrows; i++) {
+    total += (E.row[i].rsize + line_width - 1) / line_width;
+    if (E.row[i].rsize == 0) total++;
+  }
+  
+  return total;
+}
+
+int findLastWrappedLineStart(erow *row) {
+  int line_width = E.screencols - LINE_NUM_WIDTH;
+  int last_line_start = 0;
+  int char_pos = 0;
+  
+  while (char_pos < row->rsize) {
+    last_line_start = char_pos;
+    int start_pos = char_pos;
+    int end_pos = start_pos + line_width;
+    if (end_pos > row->rsize) end_pos = row->rsize;
+    
+    if (end_pos < row->rsize) {
+      int word_break = end_pos;
+      while (word_break > start_pos && !isspace(row->render[word_break]) && 
+             row->render[word_break] != '\0') {
+        word_break--;
+      }
+      if (word_break > start_pos) {
+        end_pos = word_break;
+      }
+    }
+    
+    char_pos = end_pos;
+    if (char_pos < row->rsize && isspace(row->render[char_pos])) {
+      char_pos++;
+    }
+  }
+  
+  return last_line_start;
+}
+
+int getCursorScreenX(int cy, int rx) {
+  int line_width = E.screencols - LINE_NUM_WIDTH;
+  int screen_x = LINE_NUM_WIDTH + 1;
+  
+  if (cy >= E.numrows) {
+    return screen_x;
+  }
+  
+  erow *row = &E.row[cy];
+  
+  int char_pos = 0;
+  int cursor_found = 0;
+  
+  while (char_pos < row->rsize && !cursor_found) {
+    int start_pos = char_pos;
+    int end_pos = start_pos + line_width;
+    if (end_pos > row->rsize) end_pos = row->rsize;
+    
+    if (end_pos < row->rsize) {
+      int word_break = end_pos;
+      while (word_break > start_pos && !isspace(row->render[word_break]) && 
+             row->render[word_break] != '\0') {
+        word_break--;
+      }
+      if (word_break > start_pos) {
+        end_pos = word_break;
+      }
+    }
+    
+    if (rx >= start_pos && rx < end_pos) {
+      screen_x = (rx - start_pos) + LINE_NUM_WIDTH + 1;
+      cursor_found = 1;
+      break;
+    }
+    
+    char_pos = end_pos;
+    if (char_pos < row->rsize && isspace(row->render[char_pos])) {
+      char_pos++;
+    }
+  }
+  
+  if (!cursor_found) {
+    int last_line_start = findLastWrappedLineStart(row);
+    screen_x = (rx - last_line_start) + LINE_NUM_WIDTH + 1;
+  }
+  
+  return screen_x;
 }
 
 /* row operations */
@@ -883,90 +1000,151 @@ void editorScroll(){
     E.rx = editorCxToRx(&E.row[E.cy], E.cx);
   }
 
-  if(E.cy < E.rowoff){
-    E.rowoff = E.cy;
-  }
-  if(E.cy >= E.rowoff + E.screenrows){
-    E.rowoff = E.cy - E.screenrows + 1;
-  }
 
-  if(E.rx < E.coloff){
-    E.coloff = E.rx;
+  int screen_y = getWrappedScreenY(E.cy, E.rx);
+
+  if(screen_y < E.rowoff){
+    E.rowoff = screen_y;
   }
-  if(E.rx >= E.coloff + E.screencols - 5){
-    E.coloff = E.rx - E.screencols + 5 ;
+  if(screen_y >= E.rowoff + E.screenrows){
+    E.rowoff = screen_y - E.screenrows + 1;
   }
 }
 
 void editorDrawRows(struct abuf *ab){
-  for(int y = 0; y < E.screenrows; y++){
-    int filerow = y + E.rowoff;
-    if(filerow >= E.numrows){
-      if(E.numrows == 0 && y == E.screenrows/3){
-        char welcome[80];
-        int welcomelen = snprintf(welcome, sizeof(welcome), "TEXT EDITOR -- version %s", TEXTY_VERSION);
-        if(welcomelen > E.screencols) welcomelen = E.screencols;
-        int padding = (E.screencols - welcomelen)/2;
-        if(padding){
-          abAppend(ab, "~", 1);
-          padding--;
+  int line_width = E.screencols - LINE_NUM_WIDTH;
+  int current_screen_line = 0;
+  
+  for(int filerow = 0; filerow < E.numrows && current_screen_line < E.screenrows; filerow++){
+    erow *row = &E.row[filerow];
+    
+    int wrapped_lines = (row->rsize + line_width - 1) / line_width;
+    if (row->rsize == 0) wrapped_lines = 1;
+    
+    int char_pos = 0; 
+    
+    for(int wrap_line = 0; wrap_line < wrapped_lines && current_screen_line < E.screenrows; wrap_line++){
+      if(current_screen_line + E.rowoff < getWrappedScreenY(filerow, 0) + wrap_line) {
+        current_screen_line++;
+        int start_pos = char_pos;
+        int end_pos = start_pos + line_width;
+        if(end_pos > row->rsize) end_pos = row->rsize;
+        
+        if(end_pos < row->rsize && wrap_line < wrapped_lines - 1){
+          int word_break = end_pos;
+          while(word_break > start_pos && !isspace(row->render[word_break]) && 
+                row->render[word_break] != '\0'){
+            word_break--;
+          }
+          if(word_break > start_pos) {
+            end_pos = word_break;
+          }
         }
-        while(padding--)
-          abAppend(ab, " ", 1);
-        abAppend(ab, welcome, welcomelen);
+        char_pos = end_pos;
+        if(char_pos < row->rsize && isspace(row->render[char_pos])) {
+          char_pos++; 
+        }
+        continue;
       }
-      else{
+      if(current_screen_line + E.rowoff > getWrappedScreenY(filerow, 0) + wrap_line) {
+        break;
+      }
+      
+      if(wrap_line == 0){
+        char linenum[16];
+        int linenum_len = snprintf(linenum, sizeof(linenum), "%-4d ", filerow + 1);
+        abAppend(ab, "\x1b[90m", 5);
+        abAppend(ab, linenum, linenum_len);
+        abAppend(ab, "\x1b[39m", 5);
+      } else {
+        abAppend(ab, "     ", 5); 
+      }
+      
+      int start_pos = char_pos;
+      int end_pos = start_pos + line_width;
+      if(end_pos > row->rsize) end_pos = row->rsize;
+      
+      if(end_pos < row->rsize && wrap_line < wrapped_lines - 1){
+        int word_break = end_pos;
+        while(word_break > start_pos && !isspace(row->render[word_break]) && 
+              row->render[word_break] != '\0'){
+          word_break--;
+        }
+        if(word_break > start_pos) {
+          end_pos = word_break;
+        }
+      }
+      
+      int len = end_pos - start_pos;
+      if(len > 0){
+        char *c = &row->render[start_pos];
+        unsigned char *hl = &row->hl[start_pos];
+        int current_color = -1;
+        
+        for(int j = 0; j < len; j++){
+          if(iscntrl(c[j])){
+            char sym = (c[j] <= 26)? '@' + c[j] : '?';
+            abAppend(ab, "\x1b[7m", 4);
+            abAppend(ab, &sym, 1);
+            abAppend(ab, "\x1b[m", 3);
+            if (current_color != -1){
+              char buf[16];
+              int clen = snprintf(buf, sizeof(buf), "\x1b[%dm", current_color);
+              abAppend(ab, buf, clen);
+            }
+          }
+          else if(hl[j] == HL_NORMAL){
+            if(current_color != -1){
+              abAppend(ab, "\x1b[39m", 5);
+              current_color = -1;
+            }
+            abAppend(ab, &c[j], 1);
+          }
+          else{
+            int color = editorSyntaxToColor(hl[j]);
+            if(color != current_color){
+              current_color = color;
+              char buf[16];
+              int clen = snprintf(buf, sizeof(buf), "\x1b[%dm", color);
+              abAppend(ab, buf, clen);
+            }
+            abAppend(ab, &c[j], 1);
+          }
+        }
+        abAppend(ab, "\x1b[39m", 5);
+      }
+      
+      char_pos = end_pos;
+      if(char_pos < row->rsize && isspace(row->render[char_pos])) {
+        char_pos++; 
+      }
+      
+      abAppend(ab, "\x1b[K", 3);
+      abAppend(ab, "\r\n", 2);
+      current_screen_line++;
+    }
+  }
+  
+  while(current_screen_line < E.screenrows){
+    if(E.numrows == 0 && current_screen_line == E.screenrows/3){
+      char welcome[80];
+      int welcomelen = snprintf(welcome, sizeof(welcome), "TEXT EDITOR -- version %s", TEXTY_VERSION);
+      if(welcomelen > E.screencols) welcomelen = E.screencols;
+      int padding = (E.screencols - welcomelen)/2;
+      if(padding){
         abAppend(ab, "~", 1);
+        padding--;
       }
+      while(padding--)
+        abAppend(ab, " ", 1);
+      abAppend(ab, welcome, welcomelen);
     }
     else{
-      // display line number on the left of each line
-      char linenum[16];
-      int linenum_num = snprintf(linenum, sizeof(linenum), "%-4d ", filerow + 1);
-      abAppend(ab, "\x1b[90m", 5);
-      abAppend(ab, linenum, linenum_num);
-      abAppend(ab, "\x1b[39m", 5);
-
-      int len = E.row[filerow].rsize - E.coloff;
-      if(len < 0) len = 0;
-      if(len > E.screencols - 5) len = E.screencols - 5;
-      char *c = &E.row[filerow].render[E.coloff];
-      unsigned char *hl = &E.row[filerow].hl[E.coloff];
-      int current_color = -1;
-      for(int j = 0; j < len; j++){
-        if(iscntrl(c[j])){
-          char sym = (c[j] <= 26)? '@' + c[j] : '?';
-          abAppend(ab, "\x1b[7m", 4);
-          abAppend(ab, &sym, 1);
-          abAppend(ab, "\x1b[m", 3);
-          if (current_color != -1){
-            char buf[16];
-            int clen = snprintf(buf, sizeof(buf), "\x1b[%dm", current_color);
-            abAppend(ab, buf, clen);
-          }
-        }
-        else if(hl[j] == HL_NORMAL){
-          if(current_color != -1){
-            abAppend(ab, "\x1b[39m", 5);
-            current_color = -1;
-          }
-          abAppend(ab, &c[j], 1);
-        }
-        else{
-          int color = editorSyntaxToColor(hl[j]);
-          if(color != current_color){
-            current_color = color;
-            char buf[16];
-            int clen = snprintf(buf, sizeof(buf), "\x1b[%dm", color);
-            abAppend(ab, buf, clen);
-          }
-          abAppend(ab, &c[j], 1);
-        }
-      }
-      abAppend(ab, "\x1b[39m", 5);
+      abAppend(ab, "~", 1);
     }
     abAppend(ab, "\x1b[K", 3);
     abAppend(ab, "\r\n", 2);
+    current_screen_line++;
   }
 }
 
@@ -1011,9 +1189,11 @@ void editorRefreshScreen(){
   editorDrawRows(&ab);
   editorDrawStatusBar(&ab);
   editorDrawMessageBar(&ab);
+  int screen_y = getWrappedScreenY(E.cy, E.rx) - E.rowoff + 1;
+  int screen_x = getCursorScreenX(E.cy, E.rx);
 
   char buf[32];
-  snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy-E.rowoff+1, E.rx-E.coloff+6);
+  snprintf(buf, sizeof(buf), "\x1b[%d;%dH", screen_y, screen_x);
   abAppend(&ab, buf, strlen(buf));
   abAppend(&ab, "\x1b[?25h", 6);
 
