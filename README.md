@@ -9,10 +9,6 @@ At this stage, the blog implementation is complete with these key features.
 - Syntax highlighting
 - Search
 
-Next step, to implement at least one of the suggested features on my own
-
-![Suggested Features](image.png)
-
 ### Features added so far
 
 - [x] Display line numbers on the left of the line
